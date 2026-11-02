@@ -1,9 +1,11 @@
-import { BrowserView, ipcMain } from "electron";
+import { app, session } from "electron";
 import { FiltersEngine, Request } from "@ghostery/adblocker";
-import fetch from "cross-fetch";
 import log from "electron-log";
 
-import IIntegration from "../integration";
+import YTMViewManager from "../../services/ytmviewmanager";
+import PlayerStateStore from "../../services/playerstatestore";
+import { PlayerState } from "~shared/playerstatestore/types";
+import { YTMViewSetupCompletionFlags, YTMViewStatus } from "~shared/types";
 
 // EasyList + EasyPrivacy filter list URLs (same lists used by uBlock Origin / Brave)
 const FILTER_LISTS = [
@@ -53,10 +55,11 @@ const FORCE_SONG_MODE_SCRIPT = `
   if (window.__YTMD_FORCE_SONG_MODE__) return;
   window.__YTMD_FORCE_SONG_MODE__ = true;
 
-  var ytmStore = window.__YTMD_HOOK__ && window.__YTMD_HOOK__.ytmStore;
+  var hook = window.__YTMD_HOOK__;
+  var ytmStore = hook && hook.ytmStateStore && hook.ytmStateStore.store;
   if (!ytmStore) return;
 
-  var playerBar = document.querySelector("ytmusic-app-layout>ytmusic-player-bar")?.polymerController;
+  var playerBar = hook.ytmPlayerController;
   if (!playerBar || !playerBar.playerApi) return;
 
   var lastHandledVideoId = '';
@@ -167,9 +170,11 @@ const AUTO_DISMISS_YOU_THERE_SCRIPT = `
 
       // Resume playback after dismissing — the popup pauses the player
       setTimeout(function() {
-        var playerBar = document.querySelector('ytmusic-app-layout>ytmusic-player-bar')?.polymerController;
-        if (playerBar && playerBar.playerApi && !playerBar.playing) {
-          playerBar.playerApi.playVideo();
+        var controller = window.__YTMD_HOOK__ && window.__YTMD_HOOK__.ytmPlayerController;
+        var playerApi = controller && controller.playerApi;
+        // 1 = playing (same check as the RemoteControl playPause command)
+        if (playerApi && playerApi.getPlayerState() !== 1) {
+          playerApi.playVideo();
         }
       }, 500);
 
@@ -265,8 +270,8 @@ const AD_SKIP_SCRIPT = `
 
   // PRIMARY: Subscribe to YTM's internal store for instant adPlaying detection
   // This fires the moment YouTube flags an ad — zero delay.
-  if (window.__YTMD_HOOK__ && window.__YTMD_HOOK__.ytmStore) {
-    var store = window.__YTMD_HOOK__.ytmStore;
+  if (window.__YTMD_HOOK__ && window.__YTMD_HOOK__.ytmStateStore) {
+    var store = window.__YTMD_HOOK__.ytmStateStore.store;
     var wasAdPlaying = false;
 
     store.subscribe(function() {
@@ -301,8 +306,8 @@ const AD_SKIP_SCRIPT = `
     } else if (adActive) {
       // Also check store if available
       var storeAd = false;
-      if (window.__YTMD_HOOK__ && window.__YTMD_HOOK__.ytmStore) {
-        var state = window.__YTMD_HOOK__.ytmStore.getState();
+      if (window.__YTMD_HOOK__ && window.__YTMD_HOOK__.ytmStateStore) {
+        var state = window.__YTMD_HOOK__.ytmStateStore.store.getState();
         storeAd = state.player && state.player.adPlaying;
       }
       if (!storeAd) {
@@ -313,28 +318,17 @@ const AD_SKIP_SCRIPT = `
 })
 `;
 
-export default class AdBlocker implements IIntegration {
-  private ytmView: BrowserView;
-  private engine: FiltersEngine | null = null;
-  private isEnabled = false;
-  private cssKey: string | null = null;
-  private ipcListener: (() => void) | null = null;
-  private cosmeticsInjected = false;
+// Always on, so deliberately not an IntegrationManager integration: integrations are toggled by a store property and are only
+// enabled after the YTM view has started loading, while network blocking must be active before its first request.
+export default class AdBlocker {
+  private adPlaying = false;
 
-  public provide(ytmView: BrowserView): void {
-    const ytmViewChanged = ytmView !== this.ytmView;
-    this.ytmView = ytmView;
-
-    if (this.isEnabled && ytmViewChanged) {
-      this.cosmeticsInjected = false;
-      this.cssKey = null;
-      this.applyToSession();
-      this.setupLoadListener();
-    }
-  }
+  constructor(
+    private readonly ytmViewManager: YTMViewManager,
+    private readonly playerStateStore: PlayerStateStore
+  ) {}
 
   public async enable(): Promise<void> {
-    this.isEnabled = true;
     log.info("Ad Blocker: Initializing...");
 
     try {
@@ -352,109 +346,71 @@ export default class AdBlocker implements IIntegration {
         )
       );
 
-      this.engine = FiltersEngine.parse(lists.join("\n"), {
+      const engine = FiltersEngine.parse(lists.join("\n"), {
         loadCosmeticFilters: false,
         loadNetworkFilters: true
       });
 
-      this.applyToSession();
-      this.setupLoadListener();
+      // Must match the partition YTMViewManager.createView() assigns to the YTM view
+      session.fromPartition(app.isPackaged ? "persist:ytmview" : "persist:ytmview-dev").webRequest.onBeforeRequest((details, callback) => {
+        const { match } = engine.match(
+          Request.fromRawDetails({
+            url: details.url,
+            sourceUrl: details.referrer || details.url,
+            type: details.resourceType
+          })
+        );
 
-      log.info("Ad Blocker: Fully initialized and active");
+        if (match) {
+          log.debug(`Ad Blocker: Blocked ${details.url.substring(0, 80)}`);
+        }
+        callback({ cancel: match });
+      });
+      log.info("Ad Blocker: Network-level blocking enabled on ytmview session");
     } catch (error) {
-      log.error("Ad Blocker: Failed to initialize", error);
+      log.error("Ad Blocker: Failed to initialize network blocking", error);
     }
+
+    this.ytmViewManager.on("status-changed", this.ytmViewStatusChanged);
+    this.playerStateStore.on("state-changed", this.playerStateChanged);
+    log.info("Ad Blocker: Fully initialized and active");
   }
 
-  public disable(): void {
-    this.isEnabled = false;
+  private ytmViewStatusChanged = () => {
+    const webContents = this.ytmViewManager.getView()?.webContents;
+    if (!webContents) return;
 
-    if (this.ytmView) {
-      // Remove the onBeforeRequest handler by setting it to null
-      this.ytmView.webContents.session.webRequest.onBeforeRequest(null);
-    }
-
-    if (this.cssKey && this.ytmView) {
-      this.ytmView.webContents.removeInsertedCSS(this.cssKey).catch(() => {});
-      this.cssKey = null;
-    }
-
-    if (this.ipcListener) {
-      ipcMain.removeListener("ytmView:loaded", this.ipcListener);
-      this.ipcListener = null;
-    }
-
-    this.cosmeticsInjected = false;
-    this.engine = null;
-    log.info("Ad Blocker: Disabled");
-  }
-
-  public getYTMScripts(): { name: string; script: string }[] {
-    return [
-      {
-        name: "adSkip",
-        script: AD_SKIP_SCRIPT
-      },
-      {
-        name: "forceSongMode",
-        script: FORCE_SONG_MODE_SCRIPT
-      },
-      {
-        name: "autoDismissYouThere",
-        script: AUTO_DISMISS_YOU_THERE_SCRIPT
+    switch (this.ytmViewManager.status) {
+      // Entered once per loaded music.youtube.com document; inserted CSS only lasts for that document
+      case YTMViewStatus.Hooking: {
+        webContents.insertCSS(AD_HIDE_CSS).then(
+          () => log.info("Ad Blocker: Cosmetic CSS injected"),
+          error => log.error("Ad Blocker: Failed to inject cosmetic CSS", error)
+        );
+        break;
       }
-    ];
-  }
 
-  // --------------------------------------------------
-
-  private applyToSession(): void {
-    if (!this.engine || !this.ytmView) return;
-
-    const engine = this.engine;
-    this.ytmView.webContents.session.webRequest.onBeforeRequest((details, callback) => {
-      const { match } = engine.match(
-        Request.fromRawDetails({
-          url: details.url,
-          sourceUrl: details.referrer || details.url,
-          type: details.resourceType
-        })
-      );
-
-      if (match) {
-        log.debug(`Ad Blocker: Blocked ${details.url.substring(0, 80)}`);
+      // YTM hooks are installed (window.__YTMD_HOOK__); the scripts guard against running twice per page
+      case YTMViewStatus.Ready: {
+        if (this.ytmViewManager.getSetupFlags() & YTMViewSetupCompletionFlags.LocationNotApplicable) return;
+        for (const script of [AD_SKIP_SCRIPT, FORCE_SONG_MODE_SCRIPT, AUTO_DISMISS_YOU_THERE_SCRIPT]) {
+          this.executeScript(script);
+        }
+        break;
       }
-      callback({ cancel: match });
-    });
-
-    log.info("Ad Blocker: Network-level blocking enabled on ytmview session");
-  }
-
-  private setupLoadListener(): void {
-    if (this.ipcListener) {
-      ipcMain.removeListener("ytmView:loaded", this.ipcListener);
     }
+  };
 
-    this.ipcListener = () => {
-      if (!this.cosmeticsInjected) {
-        this.cosmeticsInjected = true;
-        this.injectCosmetics();
-      }
-    };
-    ipcMain.on("ytmView:loaded", this.ipcListener);
-  }
+  private playerStateChanged = (state: PlayerState) => {
+    // Run the ad skip script when YTM reports an ad starting; a no-op if it is already active in the page
+    if (state.adPlaying && !this.adPlaying) this.executeScript(AD_SKIP_SCRIPT);
+    this.adPlaying = state.adPlaying;
+  };
 
-  private async injectCosmetics(): Promise<void> {
-    if (!this.ytmView || !this.isEnabled) return;
-
-    try {
-      if (this.cssKey) {
-        await this.ytmView.webContents.removeInsertedCSS(this.cssKey);
-      }
-      this.cssKey = await this.ytmView.webContents.insertCSS(AD_HIDE_CSS);
-      log.info("Ad Blocker: Cosmetic CSS injected");
-    } catch (error) {
-      log.error("Ad Blocker: Failed to inject cosmetic CSS", error);
-    }
+  private executeScript(script: string) {
+    this.ytmViewManager
+      .getView()
+      ?.webContents?.executeJavaScript(`(${script})()`)
+      .catch(error => log.error("Ad Blocker: Failed to execute YTM script", error));
   }
 }

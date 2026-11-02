@@ -8,25 +8,37 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 25
     env:
       YTMD_UPDATE_FEED_OWNER: ${{ github.repository_owner }}
       YTMD_UPDATE_FEED_REPOSITORY: ${{ github.event.repository.name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Github checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/setup@v3
         with:
-          node-version: '24'
-          cache: npm
+          runtime: node@lts
+          cache: true
+
       - name: Install locked dependencies
-        run: npm ci --include=dev --legacy-peer-deps
+        run: pnpm install --frozen-lockfile
+
       - name: Check TypeScript
-        run: npm run typecheck
+        run: pnpm typecheck
+
       - name: Build Windows installer
-        run: npm run make -- --arch x64
+        env:
+          # Upstream disables the updater unless NODE_ENV is "production" (config/vite/main.ts).
+          NODE_ENV: production
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
+        run: pnpm make --arch x64
+
       - name: Upload installer and updater assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-x64-release
           path: out/make/squirrel.windows/x64/*

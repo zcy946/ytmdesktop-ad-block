@@ -23,13 +23,13 @@ This fork includes a four-layer ad blocking system that runs automatically — n
 
 ## Building from source
 
-Requires [Git](https://git-scm.com) and [Node.js v20+](https://nodejs.org/).
+Requires [Git](https://git-scm.com), [Node.js 22.13+](https://nodejs.org/) and [pnpm](https://pnpm.io/) (the version pinned in `packageManager`; `corepack enable` provides it). The Electron Forge CLI requires Node 22.13 or newer (`node_modules/@electron-forge/cli/package.json` `engines`).
 
 ```sh
 git clone https://github.com/Zaptimist/ytmdesktop-ad-block.git
 cd ytmdesktop-ad-block
-npm install --legacy-peer-deps
-npm run make
+pnpm install
+pnpm make
 ```
 
 The installer will be at `out/make/squirrel.windows/x64/`. Run the Setup `.exe` to install.
@@ -37,7 +37,7 @@ The installer will be at `out/make/squirrel.windows/x64/`. Run the Setup `.exe` 
 For development mode (with hot-reload):
 
 ```sh
-npm start
+pnpm start
 ```
 
 ## Startup verification
@@ -45,21 +45,23 @@ npm start
 Before changing startup/player integration code, reproduce the problem with the real app. Before handing off a change, run:
 
 ```sh
-npm ci --include=dev --legacy-peer-deps
-npm run test:startup
+pnpm install --frozen-lockfile
+pnpm test:startup
 ```
 
-This runs TypeScript checking, builds the desktop application, and launches its production bundles in Electron without a development server. The check uses a fresh temporary profile, software rendering and English consent UI. It rejects optional cookies if asked; it never signs in or reuses your installed app's settings. OS protocol/login registrations and automatic updates are excluded from this test.
+`pnpm` must be on `PATH` for this check: `pnpm test:startup` runs `pnpm package`, and Electron Forge spawns a bare `pnpm` while packaging. Use `corepack enable pnpm` (Corepack is bundled with Node 24 and earlier) or a standalone pnpm install.
 
-A pass requires the actual music preload to finish (a consent page alone is not success), the music view to be attached to a visible window, the search box and player to be ready, and a desktop volume command to reach the player. The original volume is then restored. The check exits nonzero on failure or a 60-second startup timeout.
+This runs TypeScript checking (`pnpm typecheck`), packages the desktop application (`pnpm package`), then launches the packaged app from `out/<productName>-<platform>-<arch>/` (not the production bundles in Electron) and drives it over the DevTools protocol. No development server is used. It needs Node.js 22.13+ (see Building from source). `pnpm package` must be newer than `src/`, `config/`, `package.json` and `forge.config.mts`; the runner fails on a stale `out/`. The check uses a fresh temporary profile, software rendering and English consent UI. It clicks "Reject all" on the consent page and never signs in or reuses your installed app's settings. Automatic updates are excluded. On Linux the `ytmd://` protocol and login-item registrations are redirected into temporary directories; on Windows and macOS the packaged app would register the `ytmd://` handler with the OS, so the runner refuses to run unless `YTMD_TEST_ALLOW_PROTOCOL_REGISTRATION=1` is set.
 
-Each run prints an `out/startup-*` directory containing `result.json`, `electron.log`, and screenshots when capture is possible. `shell.png` is the app's host renderer; `page.png` is the separate YouTube Music view. Inspect the page screenshot before reporting visual verification. Temporary profiles are removed when the test process exits; evidence remains under the Git-ignored `out/` directory.
+A pass requires the actual music preload to finish (a consent page alone is not success), the music view to be attached to a visible window, the search box and player to be ready, and a volume command to travel titlebar → miniplayer → main process → player. The original volume is then restored. The check exits nonzero on failure or a 60-second startup timeout.
+
+Each run creates an `out/startup-*` directory containing `result.json`, `electron.log`, `shell.png` and `page.png` (screenshots are written when capture is possible). `shell.png` is the app's host renderer; `page.png` is the separate YouTube Music view. Inspect the page screenshot before reporting visual verification. Temporary profiles are removed when the test process exits; evidence remains under the Git-ignored `out/` directory.
 
 An internet connection and a working graphical session are required. Network/consent failures are failures, not skipped tests. This checks anonymous startup and volume control, not signed-in playback, installer behavior, updates, or hardware acceleration. Run it on Windows for Windows-specific assurance; a Linux pass does not prove the Windows build works.
 
 ## Creating a Windows release
 
-The **Windows Release Build** workflow (`.github/workflows/publish.yml`) is manually dispatched against the intended commit/branch. It installs the npm lockfile on Windows with Node.js 24, checks TypeScript, builds the x64 installer, and uploads `windows-x64-release`. Update `package.json` and `package-lock.json` to the release version before running it.
+The **Windows Release Build** workflow (`.github/workflows/publish.yml`) is manually dispatched against the intended commit/branch. It installs the pnpm lockfile on Windows with the current Node.js LTS (24), checks TypeScript, builds the x64 installer with `NODE_ENV=production` so the updater stays enabled, and uploads `windows-x64-release`. Update `package.json` to the release version before running it. Fork release builds need the `LASTFM_API_KEY` and `LASTFM_API_SECRET` repository secrets (the same names upstream uses, read by `config/vite/main.ts:20-21`); without them the Last.fm integration stays disabled.
 
 The workflow builds with this fork's update-feed owner and repository. It does **not** publish automatically when a tag is pushed. After checking the build and test evidence, an explicitly authorized release can be created with its installer, `RELEASES` and `.nupkg` assets. Keep the `v<version>-adblock` tag convention and make sure the embedded app version matches it.
 
