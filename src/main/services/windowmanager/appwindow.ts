@@ -115,7 +115,7 @@ export class AppWindow<
   private windowReady = false;
   private ipcEventProxy = new EventEmitter();
 
-  private thumbarButtons: Electron.ThumbarButton[] = [];
+  private thumbarButtons: Electron.ThumbarButton[] | null = null;
   private progressBar: number = -1;
   private progressBarOptions: Electron.ProgressBarOptions | null = null;
 
@@ -338,7 +338,17 @@ export class AppWindow<
     if (process.platform !== "win32") return;
 
     this.thumbarButtons = buttons;
-    this.electronWindow?.setThumbarButtons(buttons);
+    this.applyThumbarButtons();
+  }
+
+  private applyThumbarButtons() {
+    // Registering while hidden can leave Electron updating a toolbar Windows never added.
+    // Keep the latest buttons cached until the window has a taskbar entry again.
+    if (this.thumbarButtons === null || !this.electronWindow?.isVisible()) return;
+
+    if (!this.electronWindow.setThumbarButtons(this.thumbarButtons)) {
+      log.warn(`Could not update taskbar buttons for AppWindow '${this.name}'`);
+    }
   }
 
   public setProgressBar(
@@ -457,8 +467,6 @@ export class AppWindow<
       this.windowReady = true;
     }
 
-    if (this.thumbarButtons)
-      this.electronWindow.setThumbarButtons(this.thumbarButtons);
     if (this.progressBar)
       this.electronWindow.setProgressBar(
         this.progressBar,
@@ -504,6 +512,10 @@ export class AppWindow<
       );
       return;
     }
+
+    // Hiding to the tray or switching to the miniplayer removes the native toolbar.
+    // Restore it even when playback is paused and no new player state is emitted.
+    this.electronWindow?.on("show", () => this.applyThumbarButtons());
 
     this.electronWindow?.on("close", (event) => {
       if (!this.requestedClosure) this.emit("electronwindow-close", event);

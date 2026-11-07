@@ -569,6 +569,8 @@ app.on("ready", async () => {
 
   // Wait for the main window to be ready
   await mainWindow.ready();
+  // TaskbarManager starts before Main exists; install its initial disabled controls now.
+  serviceHost.getService(TaskbarManager).reconcileTaskbar();
 
   // Attach events for the ytmviewmanager
   ytmViewManager.on("status-changed", async () => {

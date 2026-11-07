@@ -21,7 +21,8 @@
     "lint": "oxlint && oxfmt --check",
     "lint:fix": "oxlint --fix && oxfmt --write",
     "typecheck": "tsc --noEmit",
-    "test:startup": "pnpm typecheck && pnpm package && node scripts/test-startup.cjs"
+    "test:startup": "pnpm typecheck && pnpm package && node scripts/test-startup.cjs",
+    "test:taskbar": "node scripts/test-taskbar.cjs"
   },
   "peerDependencies": {
     "electron-winstaller": "^5.4.0"

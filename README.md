@@ -59,6 +59,8 @@ Each run creates an `out/startup-*` directory containing `result.json`, `electro
 
 An internet connection and a working graphical session are required. Network/consent failures are failures, not skipped tests. This checks anonymous startup and volume control, not signed-in playback, installer behavior, updates, or hardware acceleration. Run it on Windows for Windows-specific assurance; a Linux pass does not prove the Windows build works.
 
+For Windows thumbnail toolbar changes, also run `pnpm test:taskbar` in a desktop session with Explorer running. This uses a fresh temporary profile and the real Electron taskbar API to check initial registration, playback icon updates, and restoring the controls after hiding the window, including while paused. It does not register protocols or open the music site. It checks Windows API results, not the rendered thumbnail or button clicks; manually hover the packaged app's taskbar icon and verify Previous, Play/Pause and Next during playback as well.
+
 ## Creating a Windows release
 
 The **Windows Release Build** workflow (`.github/workflows/publish.yml`) is manually dispatched against the intended commit/branch. It installs the pnpm lockfile on Windows with the current Node.js LTS (24), checks TypeScript, builds the x64 installer with `NODE_ENV=production` so the updater stays enabled, and uploads `windows-x64-release`. Update `package.json` to the release version before running it. Fork release builds need the `LASTFM_API_KEY` and `LASTFM_API_SECRET` repository secrets (the same names upstream uses, read by `config/vite/main.ts:20-21`); without them the Last.fm integration stays disabled.
