@@ -1,4 +1,4 @@
-import { app, session } from "electron";
+import { app, net, session } from "electron";
 import { FiltersEngine, Request } from "@ghostery/adblocker";
 import log from "electron-log";
 
@@ -337,14 +337,25 @@ export default class AdBlocker {
       // by our own injection to avoid conflicts with YTM's Polymer framework.
       const lists = await Promise.all(
         FILTER_LISTS.map(url =>
-          fetch(url)
-            .then(r => r.text())
+          // Chromium honors the system proxy and avoids Node/Undici's paused-parser crash on socket end.
+          net.fetch(url, { signal: AbortSignal.timeout(15_000) })
+            .then(async response => {
+              if (!response.ok) {
+                await response.body?.cancel();
+                throw new Error(`HTTP ${response.status} ${response.statusText}`);
+              }
+              return response.text();
+            })
             .catch(e => {
               log.warn(`Ad Blocker: Failed to fetch ${url}`, e);
               return "";
             })
         )
       );
+
+      if (lists.every(list => !list.trim())) {
+        throw new Error("No filter lists could be downloaded; only page-level ad blocking is available");
+      }
 
       const engine = FiltersEngine.parse(lists.join("\n"), {
         loadCosmeticFilters: false,
@@ -373,7 +384,7 @@ export default class AdBlocker {
 
     this.ytmViewManager.on("status-changed", this.ytmViewStatusChanged);
     this.playerStateStore.on("state-changed", this.playerStateChanged);
-    log.info("Ad Blocker: Fully initialized and active");
+    log.info("Ad Blocker: Page-level blocking initialized");
   }
 
   private ytmViewStatusChanged = () => {

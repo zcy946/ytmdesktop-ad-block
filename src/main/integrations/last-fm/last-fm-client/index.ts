@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, net } from "electron";
 import crypto from "node:crypto";
 import log from "electron-log";
 
@@ -136,7 +136,7 @@ export default class LastFMClient {
       body.api_sig = this.sign(body);
       body.format = "json";
 
-      const response = await fetch(LASTFM_ENDPOINT, {
+      const response = await net.fetch(LASTFM_ENDPOINT, {
         method: "POST",
         body: new URLSearchParams(body),
         signal: AbortSignal.timeout(15 * 1000),

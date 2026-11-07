@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, ipcMain, Menu, MenuItemConstructorOptions, nativeTheme, powerMonitor, safeStorage, screen, shell, Tray } from "electron";
+import { app, clipboard, dialog, ipcMain, Menu, MenuItemConstructorOptions, nativeTheme, net, powerMonitor, safeStorage, screen, shell, Tray } from "electron";
 import log from "electron-log";
 import { getIconPath, v1ConfigMigration } from "./util";
 import { AppView } from "./services/windowmanager/appview";
@@ -671,17 +671,18 @@ app.on("ready", async () => {
       try {
         const feedUrl = autoUpdater.getFeedUrlNoPlatform();
         // Not all platforms are supported so we just use win32 to grab the notes
-        const res = await fetch(`${feedUrl}/win32/${configStore.get("metadata.appVersion")}`);
+        const res = await net.fetch(`${feedUrl}/win32/${configStore.get("metadata.appVersion")}`, { signal: AbortSignal.timeout(15_000) });
         if (res.ok && res.status != 204) {
           const json = await res.json();
-          return json
+          return json;
         }
 
+        await res.body?.cancel();
         return {
           name: app.getVersion(),
           notes: "# Failed to retrieve changelog"
         }
-      } catch(err) {
+      } catch (err) {
         log.warn("Failed to retrieve changelog", err);
         return {
           name: app.getVersion(),
