@@ -17,7 +17,7 @@ This fork includes a four-layer ad blocking system that runs automatically — n
 
 ## Download
 
-**[Download the latest release](https://github.com/Zaptimist/ytmdesktop-ad-block/releases/latest)** (Windows `.exe` installer)
+**[Download the latest release](https://github.com/zcy946/ytmdesktop-ad-block/releases/latest)** (Windows `.exe` installer)
 
 > Looking for the original (without ad blocking)? See [ytmdesktop/ytmdesktop](https://github.com/ytmdesktop/ytmdesktop/releases).
 
@@ -26,7 +26,7 @@ This fork includes a four-layer ad blocking system that runs automatically — n
 Requires [Git](https://git-scm.com), [Node.js 22.13+](https://nodejs.org/) and [pnpm](https://pnpm.io/) (the version pinned in `packageManager`; `corepack enable` provides it). The Electron Forge CLI requires Node 22.13 or newer (`node_modules/@electron-forge/cli/package.json` `engines`).
 
 ```sh
-git clone https://github.com/Zaptimist/ytmdesktop-ad-block.git
+git clone https://github.com/zcy946/ytmdesktop-ad-block.git
 cd ytmdesktop-ad-block
 pnpm install
 pnpm make
