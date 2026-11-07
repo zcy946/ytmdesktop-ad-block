@@ -67,6 +67,8 @@ The **Windows Release Build** workflow (`.github/workflows/publish.yml`) is manu
 
 The workflow builds with this fork's update-feed owner and repository. It does **not** publish automatically when a tag is pushed. After checking the build and test evidence, an explicitly authorized release can be created with its installer, `RELEASES` and `.nupkg` assets. Keep the `v<version>-adblock` tag convention and make sure the embedded app version matches it.
 
+To transfer a successful build directly into a draft Release, manually run **Stage Windows Release** with the source build run ID, application version and release notes. It verifies the package manifest and embedded version, adds SHA-256 checksums, and uploads the files to a draft targeting the source build's commit. Publishing that draft remains a separate, explicitly authorized step.
+
 ## Original Project Contributors
 
 This fork builds on the work of the [ytmdesktop](https://github.com/ytmdesktop/ytmdesktop) contributors:

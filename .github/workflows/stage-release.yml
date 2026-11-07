@@ -1,0 +1,97 @@
+name: Stage Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful Windows Release Build run ID
+        required: true
+        type: string
+      version:
+        description: Application version, for example 2.1.2
+        required: true
+        type: string
+      notes:
+        description: Release notes in Markdown
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  stage:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_NOTES: ${{ inputs.notes }}
+    steps:
+      - name: Validate source build
+        id: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_RUN_ID -notmatch '^\d+$') { throw 'Invalid source run ID' }
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid release version' }
+          $runJson = gh run view $env:SOURCE_RUN_ID --repo $env:GITHUB_REPOSITORY --json headSha,conclusion,workflowName
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read source run' }
+          $run = $runJson | ConvertFrom-Json
+          if ($run.workflowName -ne 'Windows Release Build' -or $run.conclusion -ne 'success') { throw 'Source must be a successful Windows Release Build' }
+          "sha=$($run.headSha)" >> $env:GITHUB_OUTPUT
+
+      - name: Download verified build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-x64-release
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: release-assets
+
+      - name: Verify package and generate checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $assets = Join-Path $env:GITHUB_WORKSPACE 'release-assets'
+          $packages = @(Get-ChildItem -LiteralPath $assets -Filter '*-full.nupkg')
+          $setups = @(Get-ChildItem -LiteralPath $assets -Filter '*.exe')
+          if ($packages.Count -ne 1 -or $setups.Count -ne 1) { throw 'Expected one full package and one installer' }
+          $package = $packages[0]
+          if ($package.Name -ne "youtube_music_desktop_app-$($env:RELEASE_VERSION)-full.nupkg") { throw 'Package version mismatch' }
+          $manifest = (Get-Content -LiteralPath (Join-Path $assets 'RELEASES') -Raw).Trim() -split '\s+'
+          if ($manifest.Count -ne 3 -or $manifest[1] -ne $package.Name -or [long]$manifest[2] -ne $package.Length) { throw 'Invalid RELEASES manifest' }
+          if ((Get-FileHash -LiteralPath $package.FullName -Algorithm SHA1).Hash -ne $manifest[0]) { throw 'RELEASES checksum mismatch' }
+          $archive = [IO.Compression.ZipFile]::OpenRead($package.FullName)
+          try {
+            $entry = $archive.GetEntry('lib/net45/youtube-music-desktop-app.exe')
+            if ($null -eq $entry) { throw 'Application executable missing' }
+            $application = Join-Path $env:RUNNER_TEMP 'release-application.exe'
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $application, $true)
+            if ((Get-Item -LiteralPath $application).VersionInfo.ProductVersion -ne $env:RELEASE_VERSION) { throw 'Embedded application version mismatch' }
+          } finally { $archive.Dispose() }
+          Rename-Item -LiteralPath $setups[0].FullName -NewName "YouTube-Music-Desktop-App-$($env:RELEASE_VERSION)-Setup.exe"
+          $files = Get-ChildItem -LiteralPath $assets -File | Sort-Object Name
+          if ($files.Count -ne 3) { throw 'Unexpected files in release artifacts' }
+          $checksums = @($files | ForEach-Object { "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" })
+          $checksums | Set-Content -LiteralPath (Join-Path $assets 'SHA256SUMS.txt') -Encoding utf8NoBOM
+          $checksums >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Create draft release and upload assets
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $env:RELEASE_NOTES | Set-Content -LiteralPath $notesFile -Encoding utf8NoBOM
+          $tag = "v$($env:RELEASE_VERSION)-adblock"
+          gh release create $tag --repo $env:GITHUB_REPOSITORY --target $env:SOURCE_SHA --draft --title "YouTube Music Desktop $($env:RELEASE_VERSION) (Ad-Free)" --notes-file $notesFile
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create draft release' }
+          $assets = @(Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'release-assets') -File | ForEach-Object FullName)
+          gh release upload $tag @assets --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload release assets' }
+          "Draft $tag prepared from $env:SOURCE_SHA; publication is a separate explicit step." >> $env:GITHUB_STEP_SUMMARY
