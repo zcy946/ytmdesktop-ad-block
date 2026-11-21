@@ -30,6 +30,7 @@ import ProtocolManager from "./services/protocolmanager";
 import PlayerStateStore from "./services/playerstatestore";
 import ProtectedAPIManager from "./services/protectedapimanager";
 import { VideoType } from "~shared/playerstatestore/types";
+import PlaybackProxy from "./services/playback-proxy";
 
 declare const ALL_WINDOWS_VITE_DEV_SERVER_URL: string;
 
@@ -110,6 +111,7 @@ integrationManager.runHook(IntegrationManagerHook.AppBeforeReady);
 
 let tray: Tray;
 let trayContextMenu;
+let playbackProxy: PlaybackProxy | undefined;
 app.on("ready", async () => {
   log.info("Application ready");
 
@@ -124,10 +126,23 @@ app.on("ready", async () => {
   const stateManager = serviceHost.getService(StateManager);
   const playerStateStore = serviceHost.getService(PlayerStateStore);
 
-  // Ad Blocker is always enabled. Download the filter lists while the updater and main window start,
-  // so network blocking is active before the YTM view begins loading (awaited before createView below)
+  const proxy = new PlaybackProxy(
+    ytmViewManager.networkSession,
+    state => {
+      if (windowManager.hasWindow("Settings")) {
+        const contents = windowManager.getWindow("Settings").webContents;
+        if (contents && !contents.isDestroyed()) contents.send("playbackProxy:changed", state);
+      }
+    },
+    () => ytmViewManager.reloadForProxyChange(),
+  );
+  playbackProxy = proxy;
+
+  // Start the configured proxy before downloading filter lists or creating the music view.
   const adBlocker = new AdBlocker(ytmViewManager, playerStateStore);
-  const adBlockerEnabled = adBlocker.enable();
+  const adBlockerEnabled = proxy.initialize().then(
+    () => adBlocker.enable(proxy.connected ? ytmViewManager.networkSession : undefined),
+  );
 
   //#region Updater Check
   const updaterWindow = windowManager.createWindow("Browser", {
@@ -371,6 +386,15 @@ app.on("ready", async () => {
         }
       }
     });
+    settingsWindow.ipcHandle("playbackProxy:getState", () => proxy.getState());
+    settingsWindow.ipcHandle("playbackProxy:chooseExecutable", () => proxy.chooseExecutable(settingsWindow._getElectronWindow()));
+    settingsWindow.ipcHandle("playbackProxy:importNodes", () => proxy.importNodes(settingsWindow._getElectronWindow()));
+    settingsWindow.ipcHandle("playbackProxy:fetchSubscription", (_event, url) => proxy.fetchSubscription(url));
+    settingsWindow.ipcHandle("playbackProxy:testNodes", () => proxy.testNodes());
+    settingsWindow.ipcHandle("playbackProxy:cancelTests", () => proxy.cancelTests());
+    settingsWindow.ipcHandle("playbackProxy:setEnabled", (_event, enabled) => proxy.setEnabled(enabled));
+    settingsWindow.ipcHandle("playbackProxy:selectNode", (_event, id) => proxy.selectNode(id));
+    settingsWindow.ipcHandle("playbackProxy:removeNode", (_event, id) => proxy.removeNode(id));
     settingsWindow.setWindowOpenHandler(details => {
       if (details.url === "https://github.com/ytmdesktop/ytmdesktop" || details.url === "https://ytmdesktop.github.io/") {
         shell.openExternal(details.url);
@@ -726,6 +750,7 @@ powerMonitor.on("shutdown", (event: Electron.Event) => {
 });
 app.on("before-quit", () => {
   log.debug("Application going to quit");
+  playbackProxy?.stop();
 
   const windowManager = serviceHost.getService(AppWindowManager);
   windowManager.forceWindowClosures();

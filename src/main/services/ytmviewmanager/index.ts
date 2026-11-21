@@ -10,6 +10,8 @@ import MemoryStore from "../memorystore";
 import { MemoryStoreSchema } from "~shared/store/schema";
 import AppWindowManager from "../windowmanager";
 
+const musicPartition = app.isPackaged ? "persist:ytmview" : "persist:ytmview-dev";
+
 export type YTMViewManagerEventMap = {
   "status-changed": [];
   "view-recreated": [];
@@ -122,6 +124,10 @@ export default class YTMViewManager extends EventEmitterService<YTMViewManagerEv
     return this.initialized;
   }
 
+  public get networkSession() {
+    return session.fromPartition(musicPartition);
+  }
+
   public createView() {
     const configStore = this.getDependency(ConfigStore);
     const stateManager = this.getDependency(StateManager);
@@ -159,7 +165,7 @@ export default class YTMViewManager extends EventEmitterService<YTMViewManagerEv
         webPreferences: {
           sandbox: true,
           contextIsolation: true,
-          partition: app.isPackaged ? "persist:ytmview" : "persist:ytmview-dev",
+          partition: musicPartition,
           preload: path.join(__dirname, `../renderer/windows/ytmview/preload.cjs`),
           devTools: !app.isPackaged ? true : configStore.get("developer.enableDevTools"),
           autoplayPolicy:
@@ -411,6 +417,21 @@ export default class YTMViewManager extends EventEmitterService<YTMViewManagerEv
 
   public getView() {
     return this.ytmView;
+  }
+
+  public reloadForProxyChange() {
+    const contents = this.ytmView?.webContents;
+    if (!contents || contents.isDestroyed()) return;
+
+    const current = contents.getURL();
+    const next = current.startsWith("https://music.youtube.com/") ? current : "https://music.youtube.com/";
+    this.hooksReady = false;
+    this.hookError = null;
+    this.setupCompletionFlags = 0;
+    this._loadError = null;
+    this.setStatus(YTMViewStatus.Loading);
+    // The view's did-fail-load handler surfaces navigation errors to the user.
+    void contents.loadURL(next).catch(() => {});
   }
 
   public async ready(): Promise<void> {

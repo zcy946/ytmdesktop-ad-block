@@ -1,4 +1,4 @@
-import { app, net, session } from "electron";
+import { session, type Session } from "electron";
 import { FiltersEngine, Request } from "@ghostery/adblocker";
 import log from "electron-log";
 
@@ -328,7 +328,7 @@ export default class AdBlocker {
     private readonly playerStateStore: PlayerStateStore
   ) {}
 
-  public async enable(): Promise<void> {
+  public async enable(downloadSession: Session = session.defaultSession): Promise<void> {
     log.info("Ad Blocker: Initializing...");
 
     try {
@@ -337,8 +337,8 @@ export default class AdBlocker {
       // by our own injection to avoid conflicts with YTM's Polymer framework.
       const lists = await Promise.all(
         FILTER_LISTS.map(url =>
-          // Chromium honors the system proxy and avoids Node/Undici's paused-parser crash on socket end.
-          net.fetch(url, { signal: AbortSignal.timeout(15_000) })
+          // Chromium uses the selected session's proxy and avoids Node/Undici's paused-parser crash on socket end.
+          downloadSession.fetch(url, { signal: AbortSignal.timeout(15_000), credentials: "omit" })
             .then(async response => {
               if (!response.ok) {
                 await response.body?.cancel();
@@ -362,8 +362,7 @@ export default class AdBlocker {
         loadNetworkFilters: true
       });
 
-      // Must match the partition YTMViewManager.createView() assigns to the YTM view
-      session.fromPartition(app.isPackaged ? "persist:ytmview" : "persist:ytmview-dev").webRequest.onBeforeRequest((details, callback) => {
+      this.ytmViewManager.networkSession.webRequest.onBeforeRequest((details, callback) => {
         const { match } = engine.match(
           Request.fromRawDetails({
             url: details.url,

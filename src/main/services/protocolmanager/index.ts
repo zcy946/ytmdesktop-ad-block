@@ -37,7 +37,7 @@ export default class ProtocolManager extends Service {
 
     // Register a `ytmd` protocol into the system to allow opening songs inside YTMD
     // This will register the protocol in development, this is intentional and should stay this way for development purposes
-    if (!app.isDefaultProtocolClient("ytmd")) {
+    if (!app.commandLine.hasSwitch("ytmd-startup-test") && !app.isDefaultProtocolClient("ytmd")) {
       if (process.defaultApp) {
         if (process.argv.length >= 2) {
           log.info("Application set as default protcol client for 'ytmd'");

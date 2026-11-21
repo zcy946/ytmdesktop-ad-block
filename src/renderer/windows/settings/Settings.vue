@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import KeybindInput from "../../components/KeybindInput.vue";
+import ProxySettings from "./ProxySettings.vue";
 import YTMDSetting from "../../components/YTMDSetting.vue";
 import { StoreSchema, TrayIconStyle } from "~shared/store/schema";
 import { AuthToken } from "~shared/integrations/companion-server/types";
@@ -318,6 +319,12 @@ window.ytmd.handleUpdateDownloaded(() => {
           <span class="material-symbols-outlined">music_note</span>Playback
         </li>
         <li
+          :class="{ active: currentTab === 6 }"
+          @click="changeTab(6)"
+        >
+          <span class="material-symbols-outlined">lan</span>Proxy
+        </li>
+        <li
           :class="{ active: currentTab === 4 }"
           @click="changeTab(4)"
         >
@@ -338,6 +345,7 @@ window.ytmd.handleUpdateDownloaded(() => {
         </li>
       </ul>
       <div class="content">
+        <ProxySettings v-if="currentTab === 6" />
         <div
           v-if="requiresRestart"
           class="restart-banner"

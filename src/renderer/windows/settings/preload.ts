@@ -6,9 +6,27 @@ import Store from "../../store-ipc/store";
 import { MemoryStoreSchema, StoreSchema } from "~shared/store/schema";
 import MemoryStore from "../../store-ipc/memory-store";
 import { WindowsEventArguments } from "~shared/types";
+import type { PlaybackProxySettings, PlaybackProxyState } from "~shared/playback-proxy";
 
 const store = new Store<StoreSchema>();
 const memoryStore = new MemoryStore<MemoryStoreSchema>();
+
+const playbackProxy: PlaybackProxySettings = {
+  getState: () => ipcRenderer.invoke("playbackProxy:getState"),
+  chooseExecutable: () => ipcRenderer.invoke("playbackProxy:chooseExecutable"),
+  importNodes: () => ipcRenderer.invoke("playbackProxy:importNodes"),
+  fetchSubscription: url => ipcRenderer.invoke("playbackProxy:fetchSubscription", url),
+  testNodes: () => ipcRenderer.invoke("playbackProxy:testNodes"),
+  cancelTests: () => { void ipcRenderer.invoke("playbackProxy:cancelTests"); },
+  setEnabled: enabled => ipcRenderer.invoke("playbackProxy:setEnabled", enabled),
+  selectNode: id => ipcRenderer.invoke("playbackProxy:selectNode", id),
+  removeNode: id => ipcRenderer.invoke("playbackProxy:removeNode", id),
+  onChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: PlaybackProxyState) => callback(state);
+    ipcRenderer.on("playbackProxy:changed", listener);
+    return () => { ipcRenderer.removeListener("playbackProxy:changed", listener); };
+  },
+};
 
 contextBridge.exposeInMainWorld("ytmd", {
   minimizeWindow: () => ipcRenderer.send("windowControls:minimize"),
@@ -50,6 +68,7 @@ contextBridge.exposeInMainWorld("ytmd", {
   isAppUpdateAvailable: async (): Promise<boolean> => await ipcRenderer.invoke("autoUpdater:isUpdateAvailable"),
   isAppUpdateDownloaded: async (): Promise<boolean> => await ipcRenderer.invoke("autoUpdater:isUpdateDownloaded"),
   getTrueFilePath: (file: File) => webUtils.getPathForFile(file),
+  playbackProxy,
 
   lastFMStepAuthenticate: () => ipcRenderer.send("lastfm:authenticate"),
 

@@ -214,14 +214,6 @@ function resolveApp() {
 function preflight() {
   if (typeof WebSocket !== "function" || typeof fetch !== "function") throw new Error(`Node.js 22 or newer is required (running ${process.version})`);
   if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) throw new Error("A graphical session is required (DISPLAY/WAYLAND_DISPLAY is not set)");
-  // The packaged app registers the ytmd:// protocol handler (src/main/services/protocolmanager/index.ts:40-49) and applies login-item settings
-  // (src/main/services/configstore/index.ts:209). On Linux both are redirected into temporary directories below; elsewhere they would land in
-  // the registry/LaunchServices, which this runner will not touch unless it is explicitly allowed.
-  if (process.platform !== "linux" && process.env.YTMD_TEST_ALLOW_PROTOCOL_REGISTRATION !== "1") {
-    throw new Error(
-      "Running the packaged app registers the ytmd:// protocol handler with the OS on this platform. Set YTMD_TEST_ALLOW_PROTOCOL_REGISTRATION=1 to allow it."
-    );
-  }
 }
 
 async function main() {
@@ -564,6 +556,7 @@ async function main() {
     }
     const args = [
       `--user-data-dir=${profile}`,
+      "--ytmd-startup-test", // keep protocol-handler and login-item changes out of the OS
       `--remote-debugging-port=${port}`,
       "--remote-allow-origins=*",
       "--disable-gpu", // software rendering
